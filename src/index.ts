@@ -476,6 +476,8 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
       let totalIndexed = 0, totalUpdated = 0, totalUnchanged = 0, totalRemoved = 0;
 
       for (const col of filtered) {
+        // Skip non-filesystem source collections (e.g. Bear) — they can't be reindexed via path
+        if (!col.path) continue;
         const result = await reindexCollection(internal, col.path, col.pattern || "**/*.md", col.name, {
           ignorePatterns: col.ignore,
           onProgress: updateOpts?.onProgress
