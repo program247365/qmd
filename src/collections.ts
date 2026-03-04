@@ -24,9 +24,12 @@ export type ContextMap = Record<string, string>;
 /**
  * A single collection configuration
  */
+export type CollectionType = string;
+
 export interface Collection {
-  path: string;              // Absolute path to index
-  pattern: string;           // Glob pattern (e.g., "**/*.md")
+  type?: CollectionType;     // Collection source type (default: "filesystem")
+  path?: string;             // Absolute path to index (required for filesystem)
+  pattern?: string;          // Glob pattern (e.g., "**/*.md") (required for filesystem)
   context?: ContextMap;      // Optional context definitions
   update?: string;           // Optional bash command to run during qmd update
   includeByDefault?: boolean; // Include in queries by default (default: true)
@@ -222,15 +225,22 @@ export function updateCollectionSettings(
 export function addCollection(
   name: string,
   path: string,
-  pattern: string = "**/*.md"
+  pattern: string = "**/*.md",
+  type?: CollectionType
 ): void {
   const config = loadConfig();
 
-  config.collections[name] = {
+  const entry: Collection = {
     path,
     pattern,
     context: config.collections[name]?.context, // Preserve existing context
   };
+
+  if (type && type !== "filesystem") {
+    entry.type = type;
+  }
+
+  config.collections[name] = entry;
 
   saveConfig(config);
 }

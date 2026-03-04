@@ -25,6 +25,9 @@ qmd collection add ~/notes --name notes
 qmd collection add ~/Documents/meetings --name meetings
 qmd collection add ~/work/docs --name docs
 
+# Index Bear notes directly (macOS only)
+qmd collection add --type bear --name bear
+
 # Add context to help with search results, each piece of context will be returned when matching sub documents are returned. This works as a tree. This is the key feature of QMD as it allows LLMs to make much better contextual choices when selecting documents. Don't sleep on it!
 qmd context add qmd://notes "Personal notes and ideas"
 qmd context add qmd://meetings "Meeting transcripts and notes"
@@ -299,6 +302,27 @@ qmd collection rename myproject my-project
 qmd ls notes
 qmd ls notes/subfolder
 ```
+
+### Non-Filesystem Sources
+
+QMD can index content from apps and services beyond the filesystem via [source plugins](src/sources/README.md). Bear Notes is the first built-in source — adding new ones requires a single file and one registry line.
+
+#### Bear Notes (macOS)
+
+QMD can index [Bear](https://bear.app) notes directly from its local SQLite database — no export needed. Bear notes get the same hybrid search, embeddings, and MCP integration as filesystem collections.
+
+```sh
+# Add Bear notes as a collection
+qmd collection add --type bear --name bear
+
+# Search your Bear notes
+qmd search "meeting notes" -c bear
+
+# Re-index after changes in Bear
+qmd update
+```
+
+Bear's database is read-only — QMD never modifies it. Encrypted and trashed notes are automatically skipped.
 
 ### Generate Vector Embeddings
 
