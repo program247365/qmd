@@ -515,10 +515,12 @@ async function updateCollections(): Promise<void> {
   for (let i = 0; i < collections.length; i++) {
     const col = collections[i];
     if (!col) continue;
-    console.log(`${c.cyan}[${i + 1}/${collections.length}]${c.reset} ${c.bold}${col.name}${c.reset} ${c.dim}(${col.glob_pattern})${c.reset}`);
+    const yamlCol = getCollectionFromYaml(col.name);
+    const colType = yamlCol?.type || col.type || "filesystem";
+    const label = (colType && colType !== "filesystem") ? colType : col.glob_pattern;
+    console.log(`${c.cyan}[${i + 1}/${collections.length}]${c.reset} ${c.bold}${col.name}${c.reset} ${c.dim}(${label})${c.reset}`);
 
     // Execute custom update command if specified in YAML
-    const yamlCol = getCollectionFromYaml(col.name);
     if (yamlCol?.update) {
       console.log(`${c.dim}    Running update command: ${yamlCol.update}${c.reset}`);
       try {
@@ -553,26 +555,32 @@ async function updateCollections(): Promise<void> {
       }
     }
 
-    const startTime = Date.now();
-    console.log(`Collection: ${col.pwd} (${col.glob_pattern})`);
-    progress.indeterminate();
+    if (colType && colType !== "filesystem") {
+      const { getSource } = await import("../sources/index.js");
+      const source = await getSource(colType);
+      await indexDocuments(source, col.name, true);
+    } else {
+      const startTime = Date.now();
+      console.log(`Collection: ${col.pwd} (${col.glob_pattern})`);
+      progress.indeterminate();
 
-    const result = await reindexCollection(storeInstance, col.pwd, col.glob_pattern, col.name, {
-      ignorePatterns: yamlCol?.ignore,
-      onProgress: (info) => {
-        progress.set((info.current / info.total) * 100);
-        const elapsed = (Date.now() - startTime) / 1000;
-        const rate = info.current / elapsed;
-        const remaining = (info.total - info.current) / rate;
-        const eta = info.current > 2 ? ` ETA: ${formatETA(remaining)}` : "";
-        if (isTTY) process.stderr.write(`\rIndexing: ${info.current}/${info.total}${eta}        `);
-      },
-    });
+      const result = await reindexCollection(storeInstance, col.pwd, col.glob_pattern, col.name, {
+        ignorePatterns: yamlCol?.ignore,
+        onProgress: (info) => {
+          progress.set((info.current / info.total) * 100);
+          const elapsed = (Date.now() - startTime) / 1000;
+          const rate = info.current / elapsed;
+          const remaining = (info.total - info.current) / rate;
+          const eta = info.current > 2 ? ` ETA: ${formatETA(remaining)}` : "";
+          if (isTTY) process.stderr.write(`\rIndexing: ${info.current}/${info.total}${eta}        `);
+        },
+      });
 
-    progress.clear();
-    console.log(`\nIndexed: ${result.indexed} new, ${result.updated} updated, ${result.unchanged} unchanged, ${result.removed} removed`);
-    if (result.orphanedCleaned > 0) {
-      console.log(`Cleaned up ${result.orphanedCleaned} orphaned content hash(es)`);
+      progress.clear();
+      console.log(`\nIndexed: ${result.indexed} new, ${result.updated} updated, ${result.unchanged} unchanged, ${result.removed} removed`);
+      if (result.orphanedCleaned > 0) {
+        console.log(`Cleaned up ${result.orphanedCleaned} orphaned content hash(es)`);
+      }
     }
     console.log("");
   }
@@ -600,6 +608,7 @@ function detectCollectionFromPath(db: Database, fsPath: string): { collectionNam
   // Find longest matching path
   let bestMatch: { name: string; path: string } | null = null;
   for (const coll of allCollections) {
+    if (!coll.path) continue;
     if (realPath.startsWith(coll.path + '/') || realPath === coll.path) {
       if (!bestMatch || coll.path.length > bestMatch.path.length) {
         bestMatch = { name: coll.name, path: coll.path };
@@ -1374,12 +1383,18 @@ function collectionList(): void {
   closeDb();
 }
 
-async function collectionAdd(pwd: string, globPattern: string, name?: string): Promise<void> {
-  // If name not provided, generate from pwd basename
+async function collectionAdd(pwd: string, globPattern: string, name?: string, type?: string): Promise<void> {
+  const isSource = type && type !== "filesystem";
+
+  // If name not provided, generate from pwd basename (or default for source types)
   let collName = name;
   if (!collName) {
-    const parts = pwd.split('/').filter(Boolean);
-    collName = parts[parts.length - 1] || 'root';
+    if (isSource) {
+      collName = type;
+    } else {
+      const parts = pwd.split('/').filter(Boolean);
+      collName = parts[parts.length - 1] || 'root';
+    }
   }
 
   // Check if collection with this name already exists in YAML
@@ -1390,7 +1405,23 @@ async function collectionAdd(pwd: string, globPattern: string, name?: string): P
     process.exit(1);
   }
 
-  // Check if a collection with this pwd+glob already exists in YAML
+  if (isSource) {
+    const { getSource, hasSource } = await import("../sources/index.js");
+    if (!hasSource(type)) {
+      console.error(`Unknown source type: ${type}`);
+      process.exit(1);
+    }
+    const { addCollection } = await import("../collections.js");
+    addCollection(collName, "", "", type);
+
+    console.log(`Creating collection '${collName}' (${type})...`);
+    const source = await getSource(type);
+    await indexDocuments(source, collName);
+    console.log(`${c.green}✓${c.reset} Collection '${collName}' created successfully`);
+    return;
+  }
+
+  // Filesystem collection: check for duplicate pwd+glob
   const allCollections = yamlListCollections();
   const existingPwdGlob = allCollections.find(c => c.path === pwd && c.pattern === globPattern);
 
@@ -1586,6 +1617,89 @@ async function indexFiles(pwd?: string, globPattern: string = DEFAULT_GLOB, coll
   const orphanedContent = cleanupOrphanedContent(db);
 
   // Check if vector index needs updating
+  const needsEmbedding = getHashesNeedingEmbedding(db);
+
+  progress.clear();
+  console.log(`\nIndexed: ${indexed} new, ${updated} updated, ${unchanged} unchanged, ${removed} removed`);
+  if (orphanedContent > 0) {
+    console.log(`Cleaned up ${orphanedContent} orphaned content hash(es)`);
+  }
+
+  if (needsEmbedding > 0 && !suppressEmbedNotice) {
+    console.log(`\nRun 'qmd embed' to update embeddings (${needsEmbedding} unique hashes need vectors)`);
+  }
+
+  closeDb();
+}
+
+async function indexDocuments(source: import("../sources/types.js").CollectionSource, collectionName: string, suppressEmbedNotice: boolean = false): Promise<void> {
+  const db = getDb();
+  const now = new Date().toISOString();
+
+  clearCache(db);
+
+  progress.indeterminate();
+  const docs = await source.readDocuments();
+
+  const total = docs.length;
+  if (total === 0) {
+    progress.clear();
+    console.log("No documents found.");
+    closeDb();
+    return;
+  }
+
+  let indexed = 0, updated = 0, unchanged = 0, processed = 0;
+  const seenPaths = new Set<string>();
+  const startTime = Date.now();
+
+  for (const doc of docs) {
+    seenPaths.add(doc.path);
+
+    const hash = await hashContent(doc.content);
+    const title = doc.title || extractTitle(doc.content, doc.path);
+
+    const existing = findActiveDocument(db, collectionName, doc.path);
+
+    if (existing) {
+      if (existing.hash === hash) {
+        if (existing.title !== title) {
+          updateDocumentTitle(db, existing.id, title, now);
+          updated++;
+        } else {
+          unchanged++;
+        }
+      } else {
+        insertContent(db, hash, doc.content, now);
+        updateDocument(db, existing.id, title, hash, doc.modified || now);
+        updated++;
+      }
+    } else {
+      indexed++;
+      insertContent(db, hash, doc.content, now);
+      insertDocument(db, collectionName, doc.path, title, hash, doc.created || now, doc.modified || now);
+    }
+
+    processed++;
+    progress.set((processed / total) * 100);
+    const elapsed = (Date.now() - startTime) / 1000;
+    const rate = processed / elapsed;
+    const remaining = (total - processed) / rate;
+    const eta = processed > 2 ? ` ETA: ${formatETA(remaining)}` : "";
+    process.stderr.write(`\rIndexing: ${processed}/${total}${eta}        `);
+  }
+
+  // Deactivate documents that no longer exist in the source
+  const allActive = getActiveDocumentPaths(db, collectionName);
+  let removed = 0;
+  for (const path of allActive) {
+    if (!seenPaths.has(path)) {
+      deactivateDocument(db, collectionName, path);
+      removed++;
+    }
+  }
+
+  const orphanedContent = cleanupOrphanedContent(db);
   const needsEmbedding = getHashesNeedingEmbedding(db);
 
   progress.clear();
@@ -2356,6 +2470,7 @@ function parseCLI() {
       // Collection options
       name: { type: "string" },  // collection name
       mask: { type: "string" },  // glob pattern
+      type: { type: "string" },  // collection type (filesystem, bear)
       // Embed options
       force: { type: "boolean", short: "f" },
       "max-docs-per-batch": { type: "string" },
@@ -2813,12 +2928,17 @@ if (isMain) {
         }
 
         case "add": {
-          const pwd = cli.args[1] || getPwd();
-          const resolvedPwd = pwd === '.' ? getPwd() : getRealPath(resolve(pwd));
-          const globPattern = cli.values.mask as string || DEFAULT_GLOB;
+          const colType = cli.values.type as string | undefined;
           const name = cli.values.name as string | undefined;
 
-          await collectionAdd(resolvedPwd, globPattern, name);
+          if (colType && colType !== "filesystem") {
+            await collectionAdd("", "", name, colType);
+          } else {
+            const pwd = cli.args[1] || getPwd();
+            const resolvedPwd = pwd === '.' ? getPwd() : getRealPath(resolve(pwd));
+            const globPattern = cli.values.mask as string || DEFAULT_GLOB;
+            await collectionAdd(resolvedPwd, globPattern, name, colType);
+          }
           break;
         }
 

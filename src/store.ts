@@ -583,6 +583,7 @@ export function toVirtualPath(db: Database, absolutePath: string): string | null
 
   // Find which collection this absolute path belongs to
   for (const coll of collections) {
+    if (!coll.path) continue;
     if (absolutePath.startsWith(coll.path + '/') || absolutePath === coll.path) {
       // Extract relative path
       const relativePath = absolutePath.startsWith(coll.path + '/')
@@ -716,8 +717,9 @@ function initializeDatabase(db: Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS store_collections (
       name TEXT PRIMARY KEY,
-      path TEXT NOT NULL,
-      pattern TEXT NOT NULL DEFAULT '**/*.md',
+      type TEXT,
+      path TEXT,
+      pattern TEXT DEFAULT '**/*.md',
       ignore_patterns TEXT,
       include_by_default INTEGER DEFAULT 1,
       update_command TEXT,
@@ -786,8 +788,9 @@ function initializeDatabase(db: Database): void {
 
 type StoreCollectionRow = {
   name: string;
-  path: string;
-  pattern: string;
+  type: string | null;
+  path: string | null;
+  pattern: string | null;
   ignore_patterns: string | null;
   include_by_default: number;
   update_command: string | null;
@@ -797,8 +800,9 @@ type StoreCollectionRow = {
 function rowToNamedCollection(row: StoreCollectionRow): NamedCollection {
   return {
     name: row.name,
-    path: row.path,
-    pattern: row.pattern,
+    ...(row.type ? { type: row.type } : {}),
+    ...(row.path ? { path: row.path } : {}),
+    ...(row.pattern ? { pattern: row.pattern } : {}),
     ...(row.ignore_patterns ? { ignore: JSON.parse(row.ignore_patterns) as string[] } : {}),
     ...(row.include_by_default === 0 ? { includeByDefault: false } : {}),
     ...(row.update_command ? { update: row.update_command } : {}),
@@ -844,11 +848,12 @@ export function getStoreContexts(db: Database): Array<{ collection: string; path
   return results;
 }
 
-export function upsertStoreCollection(db: Database, name: string, collection: Omit<Collection, 'pattern'> & { pattern?: string }): void {
+export function upsertStoreCollection(db: Database, name: string, collection: Collection): void {
   db.prepare(`
-    INSERT INTO store_collections (name, path, pattern, ignore_patterns, include_by_default, update_command, context)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO store_collections (name, type, path, pattern, ignore_patterns, include_by_default, update_command, context)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(name) DO UPDATE SET
+      type = excluded.type,
       path = excluded.path,
       pattern = excluded.pattern,
       ignore_patterns = excluded.ignore_patterns,
@@ -857,8 +862,9 @@ export function upsertStoreCollection(db: Database, name: string, collection: Om
       context = excluded.context
   `).run(
     name,
-    collection.path,
-    collection.pattern || '**/*.md',
+    collection.type || null,
+    collection.path || null,
+    collection.pattern || (collection.type ? null : '**/*.md'),
     collection.ignore ? JSON.stringify(collection.ignore) : null,
     collection.includeByDefault === false ? 0 : 1,
     collection.update || null,
@@ -1709,8 +1715,8 @@ export type MultiGetResult = {
 
 export type CollectionInfo = {
   name: string;
-  path: string | null;
-  pattern: string | null;
+  path?: string;
+  pattern?: string;
   documents: number;
   lastUpdated: string;
 };
@@ -2397,14 +2403,15 @@ export function getContextForFile(db: Database, filepath: string): string | null
 /**
  * Get collection by name from DB store_collections table.
  */
-export function getCollectionByName(db: Database, name: string): { name: string; pwd: string; glob_pattern: string } | null {
+export function getCollectionByName(db: Database, name: string): { name: string; pwd: string; glob_pattern: string; type?: string } | null {
   const collection = getStoreCollection(db, name);
   if (!collection) return null;
 
   return {
     name: collection.name,
-    pwd: collection.path,
-    glob_pattern: collection.pattern,
+    pwd: collection.path || "",
+    glob_pattern: collection.pattern || "",
+    type: collection.type,
   };
 }
 
@@ -2412,7 +2419,7 @@ export function getCollectionByName(db: Database, name: string): { name: string;
  * List all collections with document counts from database.
  * Merges store_collections config with database statistics.
  */
-export function listCollections(db: Database): { name: string; pwd: string; glob_pattern: string; doc_count: number; active_count: number; last_modified: string | null; includeByDefault: boolean }[] {
+export function listCollections(db: Database): { name: string; pwd: string; glob_pattern: string; type?: string; doc_count: number; active_count: number; last_modified: string | null; includeByDefault: boolean }[] {
   const collections = getStoreCollections(db);
 
   // Get document counts from database for each collection
@@ -2428,8 +2435,9 @@ export function listCollections(db: Database): { name: string; pwd: string; glob
 
     return {
       name: coll.name,
-      pwd: coll.path,
-      glob_pattern: coll.pattern,
+      pwd: coll.path || "",
+      glob_pattern: coll.pattern || "",
+      type: coll.type,
       doc_count: stats?.doc_count || 0,
       active_count: stats?.active_count || 0,
       last_modified: stats?.last_modified || null,
@@ -2584,7 +2592,7 @@ export function getCollectionsWithoutContext(db: Database): { name: string; pwd:
 
       collectionsWithoutContext.push({
         name: coll.name,
-        pwd: coll.path,
+        pwd: coll.path || "",
         doc_count: stats?.doc_count || 0,
       });
     }
@@ -3249,6 +3257,7 @@ export function findDocument(db: Database, filename: string, options: { includeB
   if (!doc && !filepath.startsWith('qmd://')) {
     const collections = getStoreCollections(db);
     for (const coll of collections) {
+      if (!coll.path) continue;
       let relativePath: string | null = null;
 
       // If filepath is absolute and starts with collection path, extract relative part
@@ -3319,6 +3328,7 @@ export function getDocumentBody(db: Database, doc: DocumentResult | { filepath: 
   if (!row) {
     const collections = getStoreCollections(db);
     for (const coll of collections) {
+      if (!coll.path) continue;
       if (filepath.startsWith(coll.path + '/')) {
         const relativePath = filepath.slice(coll.path.length + 1);
         row = db.prepare(`
@@ -3479,8 +3489,8 @@ export function getStatus(db: Database): IndexStatus {
     const config = configLookup.get(row.name);
     return {
       name: row.name,
-      path: config?.path ?? null,
-      pattern: config?.pattern ?? null,
+      path: config?.path ?? undefined,
+      pattern: config?.pattern ?? undefined,
       documents: row.active_count,
       lastUpdated: row.last_doc_update || new Date().toISOString(),
     };
