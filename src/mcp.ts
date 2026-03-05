@@ -45,8 +45,8 @@ type StatusResult = {
   hasVectorIndex: boolean;
   collections: {
     name: string;
-    path: string;
-    pattern: string;
+    path?: string;
+    pattern?: string;
     documents: number;
     lastUpdated: string;
   }[];
