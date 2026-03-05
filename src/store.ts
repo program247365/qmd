@@ -565,6 +565,7 @@ export function toVirtualPath(db: Database, absolutePath: string): string | null
 
   // Find which collection this absolute path belongs to
   for (const coll of collections) {
+    if (!coll.path) continue;
     if (absolutePath.startsWith(coll.path + '/') || absolutePath === coll.path) {
       // Extract relative path
       const relativePath = absolutePath.startsWith(coll.path + '/')
@@ -1050,8 +1051,8 @@ export type MultiGetResult = {
 
 export type CollectionInfo = {
   name: string;
-  path: string;
-  pattern: string;
+  path?: string;
+  pattern?: string;
   documents: number;
   lastUpdated: string;
 };
@@ -1731,14 +1732,15 @@ export function getContextForFile(db: Database, filepath: string): string | null
  * Get collection by name from YAML config.
  * Returns collection metadata from ~/.config/qmd/index.yml
  */
-export function getCollectionByName(db: Database, name: string): { name: string; pwd: string; glob_pattern: string } | null {
+export function getCollectionByName(db: Database, name: string): { name: string; pwd: string; glob_pattern: string; type?: string } | null {
   const collection = getCollection(name);
   if (!collection) return null;
 
   return {
     name: collection.name,
-    pwd: collection.path,
-    glob_pattern: collection.pattern,
+    pwd: collection.path || "",
+    glob_pattern: collection.pattern || "",
+    type: collection.type,
   };
 }
 
@@ -1746,7 +1748,7 @@ export function getCollectionByName(db: Database, name: string): { name: string;
  * List all collections with document counts from database.
  * Merges YAML config with database statistics.
  */
-export function listCollections(db: Database): { name: string; pwd: string; glob_pattern: string; doc_count: number; active_count: number; last_modified: string | null }[] {
+export function listCollections(db: Database): { name: string; pwd: string; glob_pattern: string; type?: string; doc_count: number; active_count: number; last_modified: string | null }[] {
   const collections = collectionsListCollections();
 
   // Get document counts from database for each collection
@@ -1762,8 +1764,9 @@ export function listCollections(db: Database): { name: string; pwd: string; glob
 
     return {
       name: coll.name,
-      pwd: coll.path,
-      glob_pattern: coll.pattern,
+      pwd: coll.path || "",
+      glob_pattern: coll.pattern || "",
+      type: coll.type,
       doc_count: stats?.doc_count || 0,
       active_count: stats?.active_count || 0,
       last_modified: stats?.last_modified || null,
@@ -1917,7 +1920,7 @@ export function getCollectionsWithoutContext(db: Database): { name: string; pwd:
 
       collectionsWithoutContext.push({
         name: coll.name,
-        pwd: coll.path,
+        pwd: coll.path || "",
         doc_count: stats?.doc_count || 0,
       });
     }
@@ -2502,6 +2505,7 @@ export function findDocument(db: Database, filename: string, options: { includeB
   if (!doc && !filepath.startsWith('qmd://')) {
     const collections = collectionsListCollections();
     for (const coll of collections) {
+      if (!coll.path) continue;
       let relativePath: string | null = null;
 
       // If filepath is absolute and starts with collection path, extract relative part
@@ -2572,6 +2576,7 @@ export function getDocumentBody(db: Database, doc: DocumentResult | { filepath: 
   if (!row) {
     const collections = collectionsListCollections();
     for (const coll of collections) {
+      if (!coll.path) continue;
       if (filepath.startsWith(coll.path + '/')) {
         const relativePath = filepath.slice(coll.path.length + 1);
         row = db.prepare(`
