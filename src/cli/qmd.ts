@@ -1712,7 +1712,11 @@ async function indexDocuments(source: import("../sources/types.js").CollectionSo
     console.log(`\nRun 'qmd embed' to update embeddings (${needsEmbedding} unique hashes need vectors)`);
   }
 
-  closeDb();
+  // Only close DB when called standalone; when called from updateCollections
+  // (suppressEmbedNotice=true), the caller manages the DB lifecycle.
+  if (!suppressEmbedNotice) {
+    closeDb();
+  }
 }
 
 function renderProgressBar(percent: number, width: number = 30): string {
