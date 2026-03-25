@@ -15,6 +15,7 @@ import {
   normalizeDocid,
   isDocid,
   handelize,
+  cleanupOrphanedVectors,
 } from "../src/store";
 
 // =============================================================================
@@ -85,6 +86,33 @@ describe("Path Utilities", () => {
 // Handelize Tests
 // =============================================================================
 
+describe("cleanupOrphanedVectors", () => {
+  test("returns 0 when vec table exists in schema but sqlite-vec is unavailable", () => {
+    const prepare = (sql: string) => {
+      if (sql.includes("sqlite_master") && sql.includes("vectors_vec")) {
+        return { get: () => ({ name: "vectors_vec" }) };
+      }
+      if (sql.includes("SELECT 1 FROM vectors_vec LIMIT 0")) {
+        return { get: () => { throw new Error("no such module: vec0"); } };
+      }
+      throw new Error(`Unexpected SQL in test: ${sql}`);
+    };
+
+    const db = {
+      prepare,
+      exec: () => {
+        throw new Error("cleanup should not execute vector deletes when sqlite-vec is unavailable");
+      },
+    } as any;
+
+    expect(cleanupOrphanedVectors(db)).toBe(0);
+  });
+});
+
+// =============================================================================
+// Handelize Tests
+// =============================================================================
+
 describe("handelize", () => {
   test("converts to lowercase", () => {
     expect(handelize("README.md")).toBe("readme.md");
@@ -135,6 +163,19 @@ describe("handelize", () => {
     expect(handelize("café-notes.md")).toBe("café-notes.md");
     expect(handelize("naïve.md")).toBe("naïve.md");
     expect(handelize("日本語-notes.md")).toBe("日本語-notes.md");
+  });
+
+  test("handles emoji filenames (issue #302)", () => {
+    // Emoji-only filenames should convert to hex codepoints
+    expect(handelize("🐘.md")).toBe("1f418.md");
+    expect(handelize("🎉.md")).toBe("1f389.md");
+    // Emoji mixed with text
+    expect(handelize("notes 🐘.md")).toBe("notes-1f418.md");
+    expect(handelize("🐘 elephant.md")).toBe("1f418-elephant.md");
+    // Multiple emojis
+    expect(handelize("🐘🎉.md")).toBe("1f418-1f389.md");
+    // Emoji in directory names
+    expect(handelize("🐘/notes.md")).toBe("1f418/notes.md");
   });
 
   test("handles dates and times in filenames", () => {
