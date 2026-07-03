@@ -7,6 +7,10 @@
 - Sync stale `bun.lock` (`better-sqlite3` 11.x → 12.x). CI and release
   script now use `--frozen-lockfile` to prevent recurrence. #386
   (thanks @Mic92)
+- Bear source no longer crashes `qmd update` with `SQLITE_CANTOPEN` when
+  macOS privacy protection (TCC) blocks access to Bear's database. Now
+  prints a warning with instructions to grant Full Disk Access and skips
+  the collection instead.
 
 ## [2.0.1] - 2026-03-10
 

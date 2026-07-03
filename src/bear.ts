@@ -68,7 +68,19 @@ export async function readBearNotes(): Promise<BearNote[]> {
 
   const BetterSqlite3 = await import("better-sqlite3");
   const Database = BetterSqlite3.default;
-  const db = new Database(BEAR_DB_PATH, { readonly: true });
+  let db: import("better-sqlite3").Database;
+  try {
+    db = new Database(BEAR_DB_PATH, { readonly: true });
+  } catch (err) {
+    // macOS TCC protects Bear's Group Container: stat() succeeds but open()
+    // returns EPERM, so the existsSync check above passes and we land here.
+    console.error(`Cannot open Bear database: ${err instanceof Error ? err.message : err}`);
+    if ((err as { code?: string }).code === "SQLITE_CANTOPEN") {
+      console.error("macOS is likely blocking access to Bear's data.");
+      console.error("Grant your terminal Full Disk Access in System Settings → Privacy & Security → Full Disk Access, then retry.");
+    }
+    return [];
+  }
 
   try {
     // Fetch all non-trashed, non-encrypted, non-deleted notes
